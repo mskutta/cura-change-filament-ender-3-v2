@@ -16,7 +16,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.1"
+    version = "0.0.6"
 
     def __init__(self) -> None:
         super().__init__()
@@ -37,15 +37,6 @@ class ChangeFilamentEnder3v2(Script):
                     "default_value": 1,
                     "minimum_value": "0"
                 },
-                "initial_retraction_amount":
-                {
-                    "label": "Initial Retraction",
-                    "description": "Initial filament retraction distance. The filament will be retracted with this amount before moving the nozzle away from the ongoing print.",
-                    "unit": "mm",
-                    "type": "float",
-                    "default_value": 2,
-                    "minimum_value": "0"
-                },
                 "head_park_x":
                 {
                     "label": "Park Print Head X",
@@ -62,6 +53,15 @@ class ChangeFilamentEnder3v2(Script):
                     "unit": "mm",
                     "type": "float",
                     "default_value": 10,
+                    "minimum_value": "0"
+                },
+                "initial_retraction_amount":
+                {
+                    "label": "Initial Retraction",
+                    "description": "Initial filament retraction distance. The filament will be retracted with this amount before moving the nozzle away from the ongoing print.",
+                    "unit": "mm",
+                    "type": "float",
+                    "default_value": 5,
                     "minimum_value": "0"
                 },
                 "initial_retraction_speed":
@@ -92,27 +92,6 @@ class ChangeFilamentEnder3v2(Script):
                     "default_value": 25,
                     "minimum_value": "0",
                     "enabled": false
-                },
-                "disarm_timeout":
-                {
-                    "label": "Disarm timeout",
-                    "description": "After this time steppers are going to disarm (meaning that they can easily lose their positions). Set this to 0 if you don't want to set any duration.",
-                    "type": "int",
-                    "value": "0",
-                    "minimum_value": "0",
-                    "minimum_value_warning": "0",
-                    "maximum_value_warning": "1800",
-                    "unit": "s",
-                    "enabled": false
-                },
-                "standby_temperature":
-                {
-                    "label": "Standby Temperature",
-                    "description": "Change the temperature during the pause.",
-                    "unit": "°C",
-                    "type": "int",
-                    "default_value": 0,
-                    "minimum_value": "0"
                 }
             }
         }"""
@@ -136,7 +115,6 @@ class ChangeFilamentEnder3v2(Script):
         :return: New list of layers.
         """
         pause_layer = self.getSettingValueByKey("layer_number")
-        disarm_timeout = self.getSettingValueByKey("disarm_timeout")
         initial_retraction_amount = self.getSettingValueByKey("initial_retraction_amount")
         initial_retraction_speed = self.getSettingValueByKey("initial_retraction_speed")
         later_retraction_amount = self.getSettingValueByKey("later_retraction_amount")
@@ -144,7 +122,6 @@ class ChangeFilamentEnder3v2(Script):
         park_x = self.getSettingValueByKey("head_park_x")
         park_y = self.getSettingValueByKey("head_park_y")
         layers_started = False
-        standby_temperature = self.getSettingValueByKey("standby_temperature")
         max_x = Application.getInstance().getGlobalContainerStack().getProperty("machine_width", "value")
         max_y = Application.getInstance().getGlobalContainerStack().getProperty("machine_depth", "value")
 
@@ -254,28 +231,35 @@ class ChangeFilamentEnder3v2(Script):
                     prepend_gcode += self.putValue(G = 1, E = -later_retraction_amount, F = later_retraction_speed * 60) + " ; eject filament\n"
 
                 # Set extruder standby temperature
-                prepend_gcode += self.putValue(M = 104, S = standby_temperature) + " ; standby temperature\n"
+                #prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
+                prepend_gcode += self.putValue(M = 104, S = 0) + " ; standby temperature\n"
 
-                prepend_gcode += "M117 Remove Filament\n"
-                prepend_gcode += self.putValue(M = 400) + " ; Finish Moves\n"
-                prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                # Disable Extruder to allow manual feed
+                prepend_gcode += self.putValue(M = 18) + " E ; disable extruder\n"
 
-                # Set the disarm timeout
-                if disarm_timeout > 0:
-                    prepend_gcode += self.putValue(M = 18, S = disarm_timeout) + " ; Set the disarm timeout\n"
+                # Notify User
+                #prepend_gcode += "M117 Remove Filament\n"
+                #prepend_gcode += self.putValue(M = 400) + " ; Wait for temperature\n"
+                #prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
+                #prepend_gcode += self.putValue(M = 400)
                 prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
-
+                
                 # Set extruder resume temperature
+                #prepend_gcode += "M117 Heating Extruder...\n"
                 prepend_gcode += self.putValue(M = 109, S = current_t) + " ; resume temperature\n"
 
-                prepend_gcode += "M117 Load Filament\n"
-                prepend_gcode += self.putValue(M = 400) + " ; Wait for temperature\n"
-                prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                #prepend_gcode += "M117 Load Filament\n"
+                #prepend_gcode += self.putValue(M = 400) + " ; Wait for temperature\n"
+                #prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
+                #prepend_gcode += self.putValue(M = 400)
                 prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                
+                # Enable Extruder
+                prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
 
                 # Push the filament back,
                 if initial_retraction_amount != 0:
