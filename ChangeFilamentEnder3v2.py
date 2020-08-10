@@ -1,6 +1,7 @@
 # ChangeFilamentEnder3v2 script - Change filament at a given height.
 # This script is based on the PostProcessingPlugin scripts in Cura.
 # https://github.com/Ultimaker/Cura/tree/master/plugins/PostProcessingPlugin/scripts
+# https://marlinfw.org/docs/gcode/G000-G001.html
 
 # Copyright (c) 2020 Mike Skutta
 # The PostProcessingPlugin is released under the terms of the AGPLv3 or higher.
@@ -16,7 +17,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.6"
+    version = "0.0.8"
 
     def __init__(self) -> None:
         super().__init__()
@@ -96,19 +97,6 @@ class ChangeFilamentEnder3v2(Script):
             }
         }"""
 
-    ##  Get the X and Y values for a layer (will be used to get X and Y of the
-    #   layer after the pause).
-    def getNextXY(self, layer: str) -> Tuple[float, float]:
-        """Get the X and Y values for a layer (will be used to get X and Y of the layer after the pause)."""
-        lines = layer.split("\n")
-        for line in lines:
-            if line.startswith(("G0", "G1", "G2", "G3")):
-                if self.getValue(line, "X") is not None and self.getValue(line, "Y") is not None:
-                    x = self.getValue(line, "X")
-                    y = self.getValue(line, "Y")
-                    return x, y
-        return 0, 0
-
     def execute(self, data: List[str]) -> List[str]:
         """Inserts the pause commands.
         :param data: List of layers.
@@ -135,9 +123,11 @@ class ChangeFilamentEnder3v2(Script):
         if park_y > max_y - 10:
             park_y = max_y - 10
 
+        current_x = 0
+        current_y = 0
         current_z = 0
         current_layer = 0
-        current_extrusion_f = 0
+        current_f = 0
         current_t = 0
 
         nbr_negative_layers = 0
@@ -165,7 +155,15 @@ class ChangeFilamentEnder3v2(Script):
 
                 # Look for the feed rate of an extrusion instruction
                 if self.getValue(line, "F") is not None and self.getValue(line, "E") is not None:
-                    current_extrusion_f = self.getValue(line, "F")
+                    current_f = self.getValue(line, "F")
+
+                # If an X instruction is in the line, read the current X
+                if self.getValue(line, "X") is not None:
+                    current_x = self.getValue(line, "X")
+
+                # If a Y instruction is in the line, read the current Y
+                if self.getValue(line, "Y") is not None:
+                    current_y = self.getValue(line, "Y")
 
                 # If a Z instruction is in the line, read the current Z
                 if self.getValue(line, "Z") is not None:
@@ -185,11 +183,6 @@ class ChangeFilamentEnder3v2(Script):
                 if current_layer < pause_layer - nbr_negative_layers:
                     continue
 
-                # Get X and Y from the next layer (better position for
-                # the nozzle)
-                next_layer = data[index + 1]
-                x, y = self.getNextXY(next_layer)
-
                 prev_layer = data[index - 1]
                 prev_lines = prev_layer.split("\n")
                 current_e = 0.
@@ -204,12 +197,12 @@ class ChangeFilamentEnder3v2(Script):
                 prepend_gcode = ";TYPE:CUSTOM\n"
                 prepend_gcode += ";added code by post processing\n"
                 prepend_gcode += ";script: ChangeFilamentEnder3v2.py\n"
-                prepend_gcode += ";next x: {x}\n".format(x = x)
-                prepend_gcode += ";next y: {y}\n".format(y = y)
+                prepend_gcode += ";current x: {x}\n".format(x = current_x)
+                prepend_gcode += ";current y: {y}\n".format(y = current_y)
                 prepend_gcode += ";current z: {z}\n".format(z = current_z)
                 prepend_gcode += ";current e: {e}\n".format(e = current_e)
                 prepend_gcode += ";current t: {t}\n".format(t = current_t)
-                prepend_gcode += ";current f: {f}\n".format(f = current_extrusion_f)
+                prepend_gcode += ";current f: {f}\n".format(f = current_f)
                 prepend_gcode += ";current layer: {layer}\n".format(layer = current_layer)
 
                 # Retraction
@@ -217,45 +210,36 @@ class ChangeFilamentEnder3v2(Script):
                 if initial_retraction_amount > 0:
                     prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " ; initial filament retract\n"
 
-                # Move the head away
-                prepend_gcode += self.putValue(G = 1, Z = current_z + 1, F = 300) + " ; move up a millimeter to get out of the way\n"
-
                 # Park at x and y
                 prepend_gcode += self.putValue(G = 1, X = park_x, Y = park_y, F = 9000) + " ; move head away\n"
-
-                if current_z < 15:
-                        prepend_gcode += self.putValue(G = 1, Z = 15, F = 300) + " ; too close to bed--move to at least 15mm\n"
 
                 # Eject Filament
                 if later_retraction_amount > 0:
                     prepend_gcode += self.putValue(G = 1, E = -later_retraction_amount, F = later_retraction_speed * 60) + " ; eject filament\n"
 
                 # Set extruder standby temperature
-                #prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
                 prepend_gcode += self.putValue(M = 104, S = 0) + " ; standby temperature\n"
 
                 # Disable Extruder to allow manual feed
                 prepend_gcode += self.putValue(M = 18) + " E ; disable extruder\n"
 
                 # Notify User
-                #prepend_gcode += "M117 Remove Filament\n"
-                #prepend_gcode += self.putValue(M = 400) + " ; Wait for temperature\n"
-                #prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                prepend_gcode += "M117 Remove Filament\n"
+                prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
+                prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
-                #prepend_gcode += self.putValue(M = 400)
                 prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
                 
                 # Set extruder resume temperature
-                #prepend_gcode += "M117 Heating Extruder...\n"
+                prepend_gcode += "M117 Heating Extruder\n"
                 prepend_gcode += self.putValue(M = 109, S = current_t) + " ; resume temperature\n"
 
-                #prepend_gcode += "M117 Load Filament\n"
-                #prepend_gcode += self.putValue(M = 400) + " ; Wait for temperature\n"
-                #prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                prepend_gcode += "M117 Load Filament\n"
+                prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
+                prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
-                #prepend_gcode += self.putValue(M = 400)
                 prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
                 
                 # Enable Extruder
@@ -271,16 +255,13 @@ class ChangeFilamentEnder3v2(Script):
                     prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " : Retract filament\n"
 
                 # Move the head back
-                if current_z < 15:
-                    prepend_gcode += self.putValue(G = 1, Z = current_z + 1, F = 300) + "\n"
-                prepend_gcode += self.putValue(G = 1, X = x, Y = y, F = 9000) + " ; restore x/y position\n"
-                prepend_gcode += self.putValue(G = 1, Z = current_z, F = 300) + " ; move back down to resume height\n"
-
+                prepend_gcode += self.putValue(G = 1, X = current_x, Y = current_y, F = 9000) + " ; move back to x/y position\n"
+                
                 if initial_retraction_amount != 0:
                     prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament\n"
 
-                if current_extrusion_f != 0:
-                    prepend_gcode += self.putValue(G = 1, F = current_extrusion_f) + " ; restore extrusion feedrate\n"
+                if current_f != 0:
+                    prepend_gcode += self.putValue(G = 1, F = current_f) + " ; restore extrusion feedrate\n"
                 else:
                     Logger.log("w", "No previous feedrate found in gcode, feedrate for next layer(s) might be incorrect")
 
