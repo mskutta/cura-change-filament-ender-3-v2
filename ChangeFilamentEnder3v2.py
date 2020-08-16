@@ -17,7 +17,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.8"
+    version = "0.0.12"
 
     def __init__(self) -> None:
         super().__init__()
@@ -55,6 +55,22 @@ class ChangeFilamentEnder3v2(Script):
                     "type": "float",
                     "default_value": 10,
                     "minimum_value": "0"
+                },
+                "head_park_z_min":
+                {
+                    "label": "Park Print Head Minimum Z",
+                    "description": "What minimum Z location does the head move to when pausing.",
+                    "unit": "mm",
+                    "type": "float",
+                    "default_value": 15,
+                    "minimum_value": "0"
+                },
+                "minimize_backlash":
+                {
+                    "label": "Minimize Z Backlash",
+                    "description": "Minimize Z backlash by dropping the Z-axis to the previous Z position and restoring to current Z. Park X/Y must be away from print to prevent damage.",
+                    "type": "bool",
+                    "default_value": true
                 },
                 "initial_retraction_amount":
                 {
@@ -109,6 +125,8 @@ class ChangeFilamentEnder3v2(Script):
         later_retraction_speed = self.getSettingValueByKey("later_retraction_speed")
         park_x = self.getSettingValueByKey("head_park_x")
         park_y = self.getSettingValueByKey("head_park_y")
+        park_z_min = self.getSettingValueByKey("head_park_z_min")
+        minimize_backlash = self.getSettingValueByKey("minimize_backlash")
         layers_started = False
         max_x = Application.getInstance().getGlobalContainerStack().getProperty("machine_width", "value")
         max_y = Application.getInstance().getGlobalContainerStack().getProperty("machine_depth", "value")
@@ -129,6 +147,7 @@ class ChangeFilamentEnder3v2(Script):
         current_layer = 0
         current_f = 0
         current_t = 0
+        previous_z = 0
 
         nbr_negative_layers = 0
 
@@ -165,8 +184,9 @@ class ChangeFilamentEnder3v2(Script):
                 if self.getValue(line, "Y") is not None:
                     current_y = self.getValue(line, "Y")
 
-                # If a Z instruction is in the line, read the current Z
+                # If a Z instruction is in the line, read the current Z. Keep previous Z.
                 if self.getValue(line, "Z") is not None:
+                    previous_z = current_z
                     current_z = self.getValue(line, "Z")
 
                 # Pause at layer
@@ -196,10 +216,11 @@ class ChangeFilamentEnder3v2(Script):
 
                 prepend_gcode = ";TYPE:CUSTOM\n"
                 prepend_gcode += ";added code by post processing\n"
-                prepend_gcode += ";script: ChangeFilamentEnder3v2.py\n"
+                prepend_gcode += ";script: ChangeFilamentEnder3v2.py v" + self.version + "\n"
                 prepend_gcode += ";current x: {x}\n".format(x = current_x)
                 prepend_gcode += ";current y: {y}\n".format(y = current_y)
                 prepend_gcode += ";current z: {z}\n".format(z = current_z)
+                prepend_gcode += ";previous z: {z}\n".format(z = previous_z)
                 prepend_gcode += ";current e: {e}\n".format(e = current_e)
                 prepend_gcode += ";current t: {t}\n".format(t = current_t)
                 prepend_gcode += ";current f: {f}\n".format(f = current_f)
@@ -212,6 +233,10 @@ class ChangeFilamentEnder3v2(Script):
 
                 # Park at x and y
                 prepend_gcode += self.putValue(G = 1, X = park_x, Y = park_y, F = 9000) + " ; move head away\n"
+
+                # Move to min z
+                if park_z_min > 0 and current_z < park_z_min:
+                    prepend_gcode += self.putValue(G = 1, Z = park_z_min, F = 300) + " ; too close to bed, move to minimum z\n"
 
                 # Eject Filament
                 if later_retraction_amount > 0:
@@ -229,7 +254,8 @@ class ChangeFilamentEnder3v2(Script):
                 prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
-                prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                prepend_gcode += self.putValue(M = 0) + " Remove Filament ; Wait for user\n"
                 
                 # Set extruder resume temperature
                 prepend_gcode += "M117 Heating Extruder\n"
@@ -240,19 +266,30 @@ class ChangeFilamentEnder3v2(Script):
                 prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
-                prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                prepend_gcode += self.putValue(M = 0) + " Load Filament ; Wait for user\n"
                 
                 # Enable Extruder
                 prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
 
                 # Push the filament back,
-                if initial_retraction_amount != 0:
-                    prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament\n"
-
                 # and retract again, the properly primes the nozzle
                 # when changing filament.
                 if initial_retraction_amount != 0:
-                    prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " : Retract filament\n"
+                    prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament (prime)\n"
+                    prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Retract filament (prime)\n"
+                    prepend_gcode += "M117 Wipe Nozzle\n"
+                    prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
+                    prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                    prepend_gcode += self.putValue(M = 0, S = 10) + " Wipe Nozzle ; Wait for user\n"
+
+                # Restore z position
+                if park_z_min > 0 and current_z < park_z_min:
+                    prepend_gcode += self.putValue(G = 1, Z = current_z, F = 300) + " ; move z back to current position\n"
+
+                if minimize_backlash:
+                    prepend_gcode += self.putValue(G = 1, Z = previous_z, F = 300) + " ; drop to previous z (minimize backlash)\n"
+                    prepend_gcode += self.putValue(G = 1, Z = current_z, F = 300) + " ; raise to current z (minimize backlash)\n"
 
                 # Move the head back
                 prepend_gcode += self.putValue(G = 1, X = current_x, Y = current_y, F = 9000) + " ; move back to x/y position\n"
