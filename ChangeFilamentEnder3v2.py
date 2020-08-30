@@ -17,7 +17,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.12"
+    version = "0.0.16"
 
     def __init__(self) -> None:
         super().__init__()
@@ -65,12 +65,19 @@ class ChangeFilamentEnder3v2(Script):
                     "default_value": 15,
                     "minimum_value": "0"
                 },
+                "disable_endstops":
+                {
+                    "label": "Disable Endstops",
+                    "description": "Enable parking the print head outside of the build area. Be careful.",
+                    "type": "bool",
+                    "default_value": false
+                },
                 "minimize_backlash":
                 {
                     "label": "Minimize Z Backlash",
                     "description": "Minimize Z backlash by dropping the Z-axis to the previous Z position and restoring to current Z. Park X/Y must be away from print to prevent damage.",
                     "type": "bool",
-                    "default_value": true
+                    "default_value": false
                 },
                 "initial_retraction_amount":
                 {
@@ -78,7 +85,7 @@ class ChangeFilamentEnder3v2(Script):
                     "description": "Initial filament retraction distance. The filament will be retracted with this amount before moving the nozzle away from the ongoing print.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 5,
+                    "default_value": 4,
                     "minimum_value": "0"
                 },
                 "initial_retraction_speed":
@@ -97,7 +104,7 @@ class ChangeFilamentEnder3v2(Script):
                     "description": "Later filament retraction distance for removal. The filament will be retracted all the way out of the printer so that you can change the filament.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 300.0,
+                    "default_value": 30.0,
                     "minimum_value": "0"
                 },
                 "later_retraction_speed":
@@ -107,6 +114,33 @@ class ChangeFilamentEnder3v2(Script):
                     "unit": "mm/s",
                     "type": "float",
                     "default_value": 25,
+                    "minimum_value": "0",
+                    "enabled": false
+                },
+                "auto_purge":
+                {
+                    "label": "Auto Purge",
+                    "description": "Purge nozzle automatically with defined purge amount",
+                    "type": "bool",
+                    "default_value": false
+                },
+                "purge_amount":
+                {
+                    "label": "Purge Distance",
+                    "description": "Amount to purge after filament change",
+                    "unit": "mm",
+                    "type": "float",
+                    "default_value": 50,
+                    "minimum_value": "0",
+                    "enabled": "auto_purge"
+                },
+                "purge_speed":
+                {
+                    "label": "Purge Speed",
+                    "description": "How fast to purge the filament.",
+                    "unit": "mm/s",
+                    "type": "float",
+                    "default_value": 10,
                     "minimum_value": "0",
                     "enabled": false
                 }
@@ -119,27 +153,32 @@ class ChangeFilamentEnder3v2(Script):
         :return: New list of layers.
         """
         pause_layer = self.getSettingValueByKey("layer_number")
+        park_x = self.getSettingValueByKey("head_park_x")
+        park_y = self.getSettingValueByKey("head_park_y")
+        park_z_min = self.getSettingValueByKey("head_park_z_min")
+        disable_endstops = self.getSettingValueByKey("disable_endstops")
+        minimize_backlash = self.getSettingValueByKey("minimize_backlash")
         initial_retraction_amount = self.getSettingValueByKey("initial_retraction_amount")
         initial_retraction_speed = self.getSettingValueByKey("initial_retraction_speed")
         later_retraction_amount = self.getSettingValueByKey("later_retraction_amount")
         later_retraction_speed = self.getSettingValueByKey("later_retraction_speed")
-        park_x = self.getSettingValueByKey("head_park_x")
-        park_y = self.getSettingValueByKey("head_park_y")
-        park_z_min = self.getSettingValueByKey("head_park_z_min")
-        minimize_backlash = self.getSettingValueByKey("minimize_backlash")
+        auto_purge = self.getSettingValueByKey("auto_purge")
+        purge_amount = self.getSettingValueByKey("purge_amount")
+        purge_speed = self.getSettingValueByKey("purge_speed")
         layers_started = False
         max_x = Application.getInstance().getGlobalContainerStack().getProperty("machine_width", "value")
         max_y = Application.getInstance().getGlobalContainerStack().getProperty("machine_depth", "value")
 
         # Ensure park_x and park_y are in range. Pad with 10mm to prevent hitting end stops
-        if park_x < 10:
-            park_x = 10
-        if park_y < 10:
-            park_y = 10
-        if park_x > max_x - 10:
-            park_x = max_x - 10
-        if park_y > max_y - 10:
-            park_y = max_y - 10
+        if not disable_endstops:
+            if park_x < 10:
+                park_x = 10
+            if park_y < 10:
+                park_y = 10
+            if park_x > max_x - 10:
+                park_x = max_x - 10
+            if park_y > max_y - 10:
+                park_y = max_y - 10
 
         current_x = 0
         current_y = 0
@@ -232,8 +271,11 @@ class ChangeFilamentEnder3v2(Script):
                     prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " ; initial filament retract\n"
 
                 # Park at x and y
+                if disable_endstops:
+                    prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
+                    prepend_gcode += self.putValue(M = 211, S = 0) + " ; disable endstops\n"
                 prepend_gcode += self.putValue(G = 1, X = park_x, Y = park_y, F = 9000) + " ; move head away\n"
-
+                
                 # Move to min z
                 if park_z_min > 0 and current_z < park_z_min:
                     prepend_gcode += self.putValue(G = 1, Z = park_z_min, F = 300) + " ; too close to bed, move to minimum z\n"
@@ -249,28 +291,34 @@ class ChangeFilamentEnder3v2(Script):
                 prepend_gcode += self.putValue(M = 18) + " E ; disable extruder\n"
 
                 # Notify User
-                prepend_gcode += "M117 Remove Filament\n"
-                prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
+                prepend_gcode += "M117 Change Filament\n"
+                prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
                 prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
                 # Wait for user before continuing
                 #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
-                prepend_gcode += self.putValue(M = 0) + " Remove Filament ; Wait for user\n"
+                prepend_gcode += self.putValue(M = 0) + " Change Filament ; Wait for user\n"
                 
                 # Set extruder resume temperature
                 prepend_gcode += "M117 Heating Extruder\n"
                 prepend_gcode += self.putValue(M = 109, S = current_t) + " ; resume temperature\n"
 
-                prepend_gcode += "M117 Load Filament\n"
-                prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
-                prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                if not auto_purge or purge_amount == 0:
+                    prepend_gcode += "M117 Purge Filament\n"
+                    prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
+                    prepend_gcode += self.putValue(M = 300) + " ; beep\n"
 
-                # Wait for user before continuing
-                #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
-                prepend_gcode += self.putValue(M = 0) + " Load Filament ; Wait for user\n"
+                    # Wait for user before continuing
+                    #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
+                    prepend_gcode += self.putValue(M = 0) + " Purge Filament ; Wait for user\n"
                 
                 # Enable Extruder
                 prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
+
+                # Purge
+                if auto_purge and purge_amount != 0:
+                    prepend_gcode += self.putValue(G = 1, E = purge_amount, F = purge_speed * 60) + " ; auto purge filament\n"
+                    prepend_gcode += self.putValue(G = 4, S = 10) + " ; releave pressure\n"
 
                 # Push the filament back,
                 # and retract again, the properly primes the nozzle
@@ -279,7 +327,7 @@ class ChangeFilamentEnder3v2(Script):
                     prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament (prime)\n"
                     prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Retract filament (prime)\n"
                     prepend_gcode += "M117 Wipe Nozzle\n"
-                    prepend_gcode += self.putValue(M = 400) + " ; Wait for buffer to clear\n"
+                    prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
                     prepend_gcode += self.putValue(M = 300) + " ; beep\n"
                     prepend_gcode += self.putValue(M = 0, S = 10) + " Wipe Nozzle ; Wait for user\n"
 
@@ -293,7 +341,10 @@ class ChangeFilamentEnder3v2(Script):
 
                 # Move the head back
                 prepend_gcode += self.putValue(G = 1, X = current_x, Y = current_y, F = 9000) + " ; move back to x/y position\n"
-                
+                if disable_endstops:
+                    prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
+                    prepend_gcode += self.putValue(M = 211, S = 1) + " ; enable endstops\n"
+
                 if initial_retraction_amount != 0:
                     prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament\n"
 
