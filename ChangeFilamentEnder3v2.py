@@ -17,7 +17,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.16"
+    version = "0.0.19"
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,7 +44,7 @@ class ChangeFilamentEnder3v2(Script):
                     "description": "What X location does the head move to when pausing.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 10,
+                    "default_value": 245,
                     "minimum_value": "0"
                 },
                 "head_park_y":
@@ -62,7 +62,7 @@ class ChangeFilamentEnder3v2(Script):
                     "description": "What minimum Z location does the head move to when pausing.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 15,
+                    "default_value": 0,
                     "minimum_value": "0"
                 },
                 "disable_endstops":
@@ -70,7 +70,7 @@ class ChangeFilamentEnder3v2(Script):
                     "label": "Disable Endstops",
                     "description": "Enable parking the print head outside of the build area. Be careful.",
                     "type": "bool",
-                    "default_value": false
+                    "default_value": true
                 },
                 "minimize_backlash":
                 {
@@ -85,7 +85,7 @@ class ChangeFilamentEnder3v2(Script):
                     "description": "Initial filament retraction distance. The filament will be retracted with this amount before moving the nozzle away from the ongoing print.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 4,
+                    "default_value": 5,
                     "minimum_value": "0"
                 },
                 "initial_retraction_speed":
@@ -122,11 +122,11 @@ class ChangeFilamentEnder3v2(Script):
                     "label": "Auto Purge",
                     "description": "Purge nozzle automatically with defined purge amount",
                     "type": "bool",
-                    "default_value": false
+                    "default_value": true
                 },
                 "purge_amount":
                 {
-                    "label": "Purge Distance",
+                    "label": " - Purge Distance",
                     "description": "Amount to purge after filament change",
                     "unit": "mm",
                     "type": "float",
@@ -136,13 +136,20 @@ class ChangeFilamentEnder3v2(Script):
                 },
                 "purge_speed":
                 {
-                    "label": "Purge Speed",
+                    "label": " - Purge Speed",
                     "description": "How fast to purge the filament.",
                     "unit": "mm/s",
                     "type": "float",
-                    "default_value": 10,
+                    "default_value": 5,
                     "minimum_value": "0",
-                    "enabled": false
+                    "enabled": "auto_purge"
+                },
+                "wipe_nozzle":
+                {
+                    "label": "Wipe Nozzle",
+                    "description": "Wait for user to manually wipe the nozzle.",
+                    "type": "bool",
+                    "default_value": false
                 }
             }
         }"""
@@ -165,6 +172,7 @@ class ChangeFilamentEnder3v2(Script):
         auto_purge = self.getSettingValueByKey("auto_purge")
         purge_amount = self.getSettingValueByKey("purge_amount")
         purge_speed = self.getSettingValueByKey("purge_speed")
+        wipe_nozzle = self.getSettingValueByKey("wipe_nozzle")
         layers_started = False
         max_x = Application.getInstance().getGlobalContainerStack().getProperty("machine_width", "value")
         max_y = Application.getInstance().getGlobalContainerStack().getProperty("machine_depth", "value")
@@ -314,6 +322,7 @@ class ChangeFilamentEnder3v2(Script):
                 
                 # Enable Extruder
                 prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
+                prepend_gcode += self.putValue(G = 4, S = 1) + " ; wait\n"
 
                 # Purge
                 if auto_purge and purge_amount != 0:
@@ -326,10 +335,11 @@ class ChangeFilamentEnder3v2(Script):
                 if initial_retraction_amount != 0:
                     prepend_gcode += self.putValue(G = 1, E = initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Extrude filament (prime)\n"
                     prepend_gcode += self.putValue(G = 1, E = -initial_retraction_amount, F = initial_retraction_speed * 60) + " ; Retract filament (prime)\n"
-                    prepend_gcode += "M117 Wipe Nozzle\n"
-                    prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
-                    prepend_gcode += self.putValue(M = 300) + " ; beep\n"
-                    prepend_gcode += self.putValue(M = 0, S = 10) + " Wipe Nozzle ; Wait for user\n"
+                    if wipe_nozzle: 
+                        prepend_gcode += "M117 Wipe Nozzle\n"
+                        prepend_gcode += self.putValue(M = 400) + " ; finish moves\n"
+                        prepend_gcode += self.putValue(M = 300) + " ; beep\n"
+                        prepend_gcode += self.putValue(M = 0, S = 10) + " Wipe Nozzle ; Wait for user\n"
 
                 # Restore z position
                 if park_z_min > 0 and current_z < park_z_min:
