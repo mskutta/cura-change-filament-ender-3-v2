@@ -17,7 +17,7 @@ from UM.Logger import Logger
 from typing import List, Tuple
 
 class ChangeFilamentEnder3v2(Script):
-    version = "0.0.19"
+    version = "0.0.20"
 
     def __init__(self) -> None:
         super().__init__()
@@ -295,8 +295,8 @@ class ChangeFilamentEnder3v2(Script):
                 # Set extruder standby temperature
                 prepend_gcode += self.putValue(M = 104, S = 0) + " ; standby temperature\n"
 
-                # Disable Extruder to allow manual feed
-                prepend_gcode += self.putValue(M = 18) + " E ; disable extruder\n"
+                ## Disable Extruder to allow manual feed
+                ## prepend_gcode += self.putValue(M = 18) + " E ; disable extruder\n"
 
                 # Notify User
                 prepend_gcode += "M117 Change Filament\n"
@@ -320,9 +320,9 @@ class ChangeFilamentEnder3v2(Script):
                     #prepend_gcode += self.putValue(M = 25) + " ; Wait for user\n"
                     prepend_gcode += self.putValue(M = 0) + " Purge Filament ; Wait for user\n"
                 
-                # Enable Extruder
-                prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
-                prepend_gcode += self.putValue(G = 4, S = 1) + " ; wait\n"
+                ## Enable Extruder
+                ## prepend_gcode += self.putValue(M = 17) + " E ; enable extruder\n"
+                ## prepend_gcode += self.putValue(G = 4, S = 1) + " ; wait\n"
 
                 # Purge
                 if auto_purge and purge_amount != 0:
